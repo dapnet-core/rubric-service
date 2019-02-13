@@ -23,6 +23,7 @@ RICRUBRICLABEL=4512
 NONSKYPERRUBRICOFFSET=1000
 pp = pprint.PrettyPrinter(indent=4)
 
+allRubrics = {}
 
 def writeCurrentSequenceToFile(currentSeq):
   try:
@@ -48,7 +49,7 @@ def getLastSequenceFromFile():
     with fileread:
       currentSequence = fileread.readlines()
       fileread.close()
-      return currentSequence
+      return currentSequence[0]
 
 def getCurrentSequence():
   r = requests.get('http://' + COUCHDB_HOST + ':' + COUCHDB_PORT + '/' + COUCHDB_DBNAME,
@@ -76,12 +77,13 @@ def sendCall(data, ric, function, expires_on, priority, distribution):
     'distribution': distribution,
     'type': 'alphanumeric'
   }
-  pp.pprint (payload)
+  #pp.pprint (payload)
   #r = requests.post('http://' + CALLS_URL, data=payload)
   #r.raise_for_status
 
 
 def sendCallfromRubricLabel(rubric):
+  print('Sending Label for Rubric ' + rubric['_id'])
   # rubric as complete object
   data = '1'
   data += chr(rubric['number'] + 0x1f)
@@ -102,9 +104,7 @@ def sendCallfromRubricLabel(rubric):
 
 def sendCallfromRubricContent(rubric, index):
   # rubric as complete JSON object, index 0-9 for message slot
-  print ('Index: ' + str(index) + ', Rubric: ' + rubric['_id'])
-  print ('Message-Data: ' + rubric['content'][index]['data'])
-
+  print ('Sending Rubric: ' + rubric['_id'] + ', Index: ' + str(index) + ', Data: ' + rubric['content'][index]['data'])
 
 
   priority = rubric['default_priority']
@@ -148,7 +148,7 @@ def sendAllContentOfRubric(rubric):
         else:
           sendCallfromRubricContent(rubric, index)
 
-def parseChanges(changes):
+def processInitialChanges(changes):
   results = changes['results']
   for result in results:
     if 'deleted' in result and result['deleted']:
@@ -158,28 +158,109 @@ def parseChanges(changes):
       # rubric was changed
       if 'doc' in result:
         doc = result['doc']
-        print (doc)
-        # Send label
-        sendCallfromRubricLabel(doc)
-        # Send all content
-        sendAllContentOfRubric(doc)
+        #print (doc)
+        SendCompleteRubricwithLabel(doc)
 
+def loadAllRubrics():
+  r = requests.get('http://' + COUCHDB_HOST + ':' + COUCHDB_PORT + '/' + COUCHDB_DBNAME + '/_all_docs',
+                   auth=CouchDBauth,
+                   params={'reduce': 'false', 'include_docs': 'true'})
+  r.raise_for_status()
+  answer = json.loads(r.text)
+  for row in answer['rows']:
+    if not row['doc']['_id'].startswith('_'):
+      id = row['doc']['_id']
+      allRubrics[id] = row['doc']
+
+def SendCompleteRubricwithLabel(rubric):
+  # Send label
+  sendCallfromRubricLabel(rubric)
+  # Send all content
+  sendAllContentOfRubric(rubric)
+
+
+def DetectandSendUpdateCallsfromChanges(changes):
+  results = changes['results']
+  for result in results:
+    if 'deleted' in result and result['deleted']:
+      # rubric was deleted
+      print ("Rubric " + result['id'] + ' was deleted')
+      # Delete from local copy
+      allRubrics.pop(result['id]'])
+    else:
+      # rubric was changed
+      if 'doc' in result:
+        newdoc = result['doc']
+        #print (newdoc)
+        id = newdoc['_id']
+        # Check if rubric is completely new
+        if not (id in allRubrics):
+          print('Rubric ' + id + ' is new, sending label and complete content')
+          SendCompleteRubricwithLabel(newdoc)
+
+        # detect changes in transmitter_groups
+        elif not (set(newdoc['transmitter_groups']) == set(allRubrics[id]['transmitter_groups'])):
+          print('Rubric ' + id + ' has changes in transmitter_groups, sending label and complete content')
+          SendCompleteRubricwithLabel(newdoc)
+
+        # detect changes in transmitters
+        elif not (set(newdoc['transmitters']) == set(allRubrics[id]['transmitters'])):
+          print('Rubric ' + id + ' has changes in transmitters, sending label and complete content')
+          SendCompleteRubricwithLabel(newdoc)
+
+        # Here the rubric is not new and the transmitter_groups and transmitters are unchanged
+        # Test for changes in content
+        contentNew = newdoc['content']
+        contentOld = allRubrics[id]['content']
+
+        index = 0
+        while (index < len(contentNew)) and (index < len(contentOld)):
+          if contentOld[index]['data'] == contentNew[index]['data']:
+            index = index + 1
+            continue
+          sendCallfromRubricContent(newdoc, index)
+          index = index + 1
+
+        # If there is more new content then old content, send it, to
+        if len(contentNew) > len(contentOld):
+          while (index < len(contentNew)):
+            sendCallfromRubricContent(newdoc, index)
+            index = index + 1
+
+        # Update local copy
+        allRubrics[id] = newdoc
+
+print('Getting last Sequence from File')
 lastSeq = getLastSequenceFromFile()
+print('Last Sequence is: ' + lastSeq)
+
 lastChanges = getLastChanges(lastSeq)
-
-# Send Name of changed rubrics in case they have been added in between
-parseChanges(lastChanges)
-
-
-
+print('lastChanges are:')
 pp.pprint(lastChanges)
 
-# seq = 'now'
-# while 1:
-#   payload = {'include_docs': 'true', 'feed': 'longpoll', 'since': seq, 'heartbeat': '30000'}
-#   r = requests.get('http://dapnetdc2.db0sda.ampr.org:5984/rubrics/_changes', auth=('admin', 'supersecret'), params=payload)
-#   print("status: " + str(r.status_code))
-#   print("content: " + r.text)
-#   change_json=json.loads(r.text)
-#   print (change_json)
-#   seq=change_json['last_seq']
+# Send Name of changed rubrics in case they have been added in between
+print('Processing Initial Changes')
+processInitialChanges(lastChanges)
+#writeCurrentSequenceToFile(lastSeq)
+
+longPollSequence = getCurrentSequence()
+print('Current Sequence is: ' + longPollSequence)
+print('Loading all rubrics')
+loadAllRubrics()
+
+while 1:
+  print('Starting long poll...')
+  payload = {'include_docs': 'true', 'feed': 'longpoll', 'since': longPollSequence, 'heartbeat': '30000'}
+  r = requests.get('http://dapnetdc2.db0sda.ampr.org:5984/rubrics/_changes',
+                   auth=CouchDBauth,
+                   params=payload)
+  r.raise_for_status
+  changes=json.loads(r.text)
+  print('Changes are:')
+  pp.pprint (changes)
+  # Save the last seq. for next round
+  longPollSequence=changes['last_seq']
+  DetectandSendUpdateCallsfromChanges(changes)
+  print('New local copy:')
+  pp.pprint(allRubrics)
+  print('New Current Sequence is: ' + longPollSequence)

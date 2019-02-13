@@ -241,10 +241,11 @@ pp.pprint(lastChanges)
 # Send Name of changed rubrics in case they have been added in between
 print('Processing Initial Changes')
 processInitialChanges(lastChanges)
-#writeCurrentSequenceToFile(lastSeq)
+
 
 longPollSequence = getCurrentSequence()
 print('Current Sequence is: ' + longPollSequence)
+writeCurrentSequenceToFile(longPollSequence)
 print('Loading all rubrics')
 loadAllRubrics()
 
@@ -260,6 +261,7 @@ while 1:
   pp.pprint (changes)
   # Save the last seq. for next round
   longPollSequence=changes['last_seq']
+  writeCurrentSequenceToFile(longPollSequence)
   DetectandSendUpdateCallsfromChanges(changes)
   print('New local copy:')
   pp.pprint(allRubrics)

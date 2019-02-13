@@ -186,46 +186,47 @@ def DetectandSendUpdateCallsfromChanges(changes):
       # rubric was deleted
       print ("Rubric " + result['id'] + ' was deleted')
       # Delete from local copy
-      allRubrics.pop(result['id]'])
+      allRubrics.pop(result['id'])
     else:
       # rubric was changed
       if 'doc' in result:
         newdoc = result['doc']
-        #print (newdoc)
         id = newdoc['_id']
         # Check if rubric is completely new
         if not (id in allRubrics):
           print('Rubric ' + id + ' is new, sending label and complete content')
           SendCompleteRubricwithLabel(newdoc)
-
         # detect changes in transmitter_groups
         elif not (set(newdoc['transmitter_groups']) == set(allRubrics[id]['transmitter_groups'])):
           print('Rubric ' + id + ' has changes in transmitter_groups, sending label and complete content')
           SendCompleteRubricwithLabel(newdoc)
-
         # detect changes in transmitters
         elif not (set(newdoc['transmitters']) == set(allRubrics[id]['transmitters'])):
           print('Rubric ' + id + ' has changes in transmitters, sending label and complete content')
           SendCompleteRubricwithLabel(newdoc)
+        else:
+          # Here the rubric is not new and the transmitter_groups and transmitters are unchanged
+          # Test for changes in content
+          contentNew = newdoc['content']
+          contentOld = allRubrics[id]['content']
 
-        # Here the rubric is not new and the transmitter_groups and transmitters are unchanged
-        # Test for changes in content
-        contentNew = newdoc['content']
-        contentOld = allRubrics[id]['content']
-
-        index = 0
-        while (index < len(contentNew)) and (index < len(contentOld)):
-          if contentOld[index]['data'] == contentNew[index]['data']:
+          index = 0
+          while (index < len(contentNew)) and (index < len(contentOld)):
+            if ('data' in contentOld[index]) and \
+              ('data' in contentNew[index]) and \
+              (contentOld[index]['data'] == contentNew[index]['data']):
+              index = index + 1
+              continue
+            if contentNew[index]['data']:
+              sendCallfromRubricContent(newdoc, index)
             index = index + 1
-            continue
-          sendCallfromRubricContent(newdoc, index)
-          index = index + 1
 
-        # If there is more new content then old content, send it, to
-        if len(contentNew) > len(contentOld):
-          while (index < len(contentNew)):
-            sendCallfromRubricContent(newdoc, index)
-            index = index + 1
+          # If there is more new content then old content, send it, to
+          if len(contentNew) > len(contentOld):
+            while (index < len(contentNew)):
+              if contentNew[index]['data']:
+                sendCallfromRubricContent(newdoc, index)
+              index = index + 1
 
         # Update local copy
         allRubrics[id] = newdoc
